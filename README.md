@@ -1,90 +1,127 @@
-# 💰 WangKu — App Pengurusan Kewangan Peribadi
+# WangKu
 
-App kewangan peribadi dengan AI Receipt Scanner, dibina dengan React + Firebase.
+WangKu ialah app pengurusan kewangan peribadi berbentuk PWA. Ia boleh di-host sebagai website Firebase Hosting dan boleh dipasang ke Home Screen telefon.
 
-![WangKu](https://img.shields.io/badge/React-18-blue) ![Firebase](https://img.shields.io/badge/Firebase-10-orange) ![PWA](https://img.shields.io/badge/PWA-Ready-green)
+## Ciri Utama
 
-## ✨ Ciri-ciri
+- Dashboard kewangan
+- Transaksi masuk/keluar
+- Budget kategori
+- Goals dengan bukti bayaran
+- Scanner resit dengan simpanan gambar bukti
+- Dark/light mode
+- Bahasa Malay/English
+- PWA Add to Home Screen
+- Firebase Firestore untuk database
+- Firebase Storage untuk gambar resit/bukti
+- Personal Mode dengan Anonymous Auth
+- Sync Account dengan Email/Password Auth
 
-- 📊 **Dashboard** — ringkasan baki, pendapatan & perbelanjaan
-- ⇄ **Transaksi** — rekod & edit transaksi, tap untuk edit
-- ◎ **Budget** — set budget setiap kategori, alert bila lebih
-- ◉ **Goals** — sasaran kewangan dengan tracker & simulator
-- 🧾 **Scanner** — imbas resit dengan Claude AI secara automatik
-- ▦ **Laporan** — analisis & carta perbelanjaan bulanan
-- ⚙️ **Tetapan** — edit profil, gaji, budget, bil — semua boleh diubah
-- 📱 **PWA** — boleh Add to Home Screen (iOS & Android)
-- ☁️ **Firebase** — data sync ke cloud (bila dikonfigurasi)
+## Upload ke GitHub
 
-## 🚀 Quick Start
+Upload semua fail projek ini ke GitHub kecuali folder yang sudah di-ignore:
+
+- `node_modules`
+- `build`
+- `.env`
+- `.firebase`
+
+Fail zip ini memang sudah disediakan tanpa folder berat tersebut.
+
+## Setup Firebase
+
+Dalam Firebase Console:
+
+1. Create project baru.
+2. Project Settings -> Your apps -> Web app.
+3. Copy Firebase config.
+4. Authentication -> Sign-in method -> enable **Anonymous** dan **Email/Password**.
+5. Firestore Database -> Create database.
+6. Storage -> Get started.
+
+## Environment Variables
+
+Copy `.env.example` kepada `.env` untuk local development:
 
 ```bash
-# 1. Clone repo
-git clone https://github.com/USERNAME/wangku.git
-cd wangku
-
-# 2. Install
-npm install
-
-# 3. Salin .env.example → .env dan isi Firebase keys
 cp .env.example .env
-
-# 4. Jalankan
-npm start
 ```
 
-## 🔥 Setup Firebase
-
-1. Pergi ke [Firebase Console](https://console.firebase.google.com)
-2. Buat projek baru
-3. Aktifkan **Firestore Database**
-4. Pergi ke Project Settings → Your apps → Web app
-5. Salin config ke `.env`
-6. Dalam `src/App.jsx`, tukar `IS_FIREBASE_ENABLED = true`
-
-## 🌐 Deploy
+Isi semua value ini:
 
 ```bash
-npm install -g firebase-tools
-firebase login
-firebase init hosting    # public dir: build, SPA: yes
+REACT_APP_FIREBASE_API_KEY=...
+REACT_APP_FIREBASE_AUTH_DOMAIN=...
+REACT_APP_FIREBASE_PROJECT_ID=...
+REACT_APP_FIREBASE_STORAGE_BUCKET=...
+REACT_APP_FIREBASE_MESSAGING_SENDER_ID=...
+REACT_APP_FIREBASE_APP_ID=...
+```
+
+Jika semua value lengkap, app akan auto aktifkan Firebase. Jika belum lengkap, app fallback ke localStorage.
+
+## GitHub Secrets untuk Auto Deploy
+
+Di GitHub repo:
+
+Settings -> Secrets and variables -> Actions -> New repository secret
+
+Tambah secrets ini:
+
+```text
+REACT_APP_FIREBASE_API_KEY
+REACT_APP_FIREBASE_AUTH_DOMAIN
+REACT_APP_FIREBASE_PROJECT_ID
+REACT_APP_FIREBASE_STORAGE_BUCKET
+REACT_APP_FIREBASE_MESSAGING_SENDER_ID
+REACT_APP_FIREBASE_APP_ID
+FIREBASE_SERVICE_ACCOUNT
+```
+
+`FIREBASE_SERVICE_ACCOUNT` ialah JSON service account Firebase untuk deploy Hosting.
+
+## Deploy
+
+Selepas GitHub Action siap, setiap push ke branch `main` akan auto:
+
+```bash
+npm ci
 npm run build
 firebase deploy
 ```
 
-App akan live di: `https://YOUR-PROJECT.web.app`
+Manual deploy juga boleh:
 
-## 📱 Add to Home Screen
-
-**Android:** Chrome menu → "Add to Home screen"  
-**iPhone:** Safari Share → "Add to Home Screen"
-
-## 📁 Struktur Projek
-
-```
-wangku/
-├── public/
-│   ├── index.html       ← HTML + PWA meta tags
-│   ├── manifest.json    ← PWA manifest
-│   ├── sw.js            ← Service Worker (offline)
-│   └── icons/           ← App icons (192px & 512px)
-├── src/
-│   ├── App.jsx          ← App utama (semua komponen)
-│   └── index.js         ← Entry point + SW registration
-├── .github/workflows/   ← Auto-deploy ke Firebase
-├── .env.example         ← Template environment variables
-├── firebase.json        ← Firebase Hosting config
-└── package.json
+```bash
+npm install
+npm run build
+firebase deploy
 ```
 
-## 🛠 Tech Stack
+## Firebase Rules
 
-- **Frontend:** React 18
-- **Database:** Firebase Firestore
-- **Hosting:** Firebase Hosting (Free tier)
-- **AI:** Claude API (receipt scanner)
-- **PWA:** Web App Manifest + Service Worker
+Rules sudah disediakan:
 
----
+- `firestore.rules`
+- `storage.rules`
 
-*Dibina dengan ❤️ menggunakan React + Firebase + Claude AI*
+Setiap user hanya boleh baca/tulis data sendiri berdasarkan Firebase Auth UID.
+
+## Personal Mode vs Sync Account
+
+Semasa buka app, user boleh pilih:
+
+- **Personal Mode**: data ikut device/browser tersebut sahaja.
+- **Sync Account**: login/create account email password supaya data boleh dibuka semula di device lain.
+
+## Home Screen
+
+Selepas deploy, buka link Firebase Hosting di telefon.
+
+iPhone:
+
+Safari -> Share -> Add to Home Screen
+
+Android:
+
+Chrome -> Menu -> Add to Home Screen / Install App

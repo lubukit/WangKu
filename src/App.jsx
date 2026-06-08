@@ -1,19 +1,27 @@
 import { useState, useRef, useEffect } from "react";
+import { initializeApp } from "firebase/app";
+import { createUserWithEmailAndPassword, getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, signOut } from "firebase/auth";
+import { doc, getDoc, getFirestore, setDoc } from "firebase/firestore";
+import { getDownloadURL, getStorage, ref, uploadString } from "firebase/storage";
 
 // ─────────────────────────────────────────────────────────
 // FIREBASE SETUP — ganti dengan config anda dari Firebase Console
 // https://console.firebase.google.com → Project Settings → Your apps
 // ─────────────────────────────────────────────────────────
 const FIREBASE_CONFIG = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID",
+  apiKey: process.env.REACT_APP_FIREBASE_API_KEY,
+  authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.REACT_APP_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.REACT_APP_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.REACT_APP_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.REACT_APP_FIREBASE_APP_ID,
 };
-// Tukar IS_FIREBASE_ENABLED = true selepas isi config di atas
-const IS_FIREBASE_ENABLED = false;
+const isFilled = (value) => value && !String(value).startsWith("your_") && !String(value).includes("YOUR_");
+const IS_FIREBASE_ENABLED = Object.values(FIREBASE_CONFIG).every(isFilled);
+const firebaseApp = IS_FIREBASE_ENABLED ? initializeApp(FIREBASE_CONFIG) : null;
+const firebaseAuth = firebaseApp ? getAuth(firebaseApp) : null;
+const firebaseDb = firebaseApp ? getFirestore(firebaseApp) : null;
+const firebaseStorage = firebaseApp ? getStorage(firebaseApp) : null;
 
 // ─────────────────────────────────────────────────────────
 const PALETTES = {
@@ -197,6 +205,40 @@ const store = {
     try { localStorage.setItem("wangku_" + key, JSON.stringify(value)); } catch {}
   },
 };
+
+const isDataUrl = (value) => typeof value === "string" && value.startsWith("data:image/");
+const shortId = () => Math.random().toString(36).slice(2, 10);
+
+async function uploadCloudImage(uid, folder, imageData, cache) {
+  if (!IS_FIREBASE_ENABLED || !firebaseStorage || !uid || !isDataUrl(imageData)) return imageData || null;
+  if (cache.has(imageData)) return cache.get(imageData);
+  const storageRef = ref(firebaseStorage, `users/${uid}/${folder}/${Date.now()}-${shortId()}.jpg`);
+  await uploadString(storageRef, imageData, "data_url");
+  const url = await getDownloadURL(storageRef);
+  cache.set(imageData, url);
+  return url;
+}
+
+async function prepareCloudData(uid, data, cache) {
+  const next = JSON.parse(JSON.stringify(data));
+  next.transactions = await Promise.all((next.transactions || []).map(async t => ({
+    ...t,
+    receiptImage: await uploadCloudImage(uid, "receipt-proofs", t.receiptImage, cache),
+  })));
+  next.scannedReceipts = await Promise.all((next.scannedReceipts || []).map(async r => ({
+    ...r,
+    imageData: await uploadCloudImage(uid, "receipt-scans", r.imageData, cache),
+  })));
+  next.goals = await Promise.all((next.goals || []).map(async g => ({
+    ...g,
+    contributions: await Promise.all((g.contributions || []).map(async c => ({
+      ...c,
+      proofImage: await uploadCloudImage(uid, "goal-proofs", c.proofImage, cache),
+    }))),
+  })));
+  next.updatedAt = new Date().toISOString();
+  return next;
+}
 
 // ── Shared UI ─────────────────────────────────────────────
 function ProgressBar({ value, max, color = C.accent, height = 6 }) {
@@ -407,7 +449,7 @@ function Onboarding({ onDone }) {
 }
 
 // ── SETTINGS ──────────────────────────────────────────────
-function Settings({ profile, setProfile, categories, setCategories, bills, setBills, prefs, setPrefs, scannedReceipts, onReset }) {
+function Settings({ profile, setProfile, categories, setCategories, bills, setBills, prefs, setPrefs, scannedReceipts, authChoice, cloudStatus, onSwitchAccount, onReset }) {
   const [tab, setTab] = useState("profil");
   const [editCat, setEditCat] = useState(null);
   const [editBill, setEditBill] = useState(null);
@@ -618,13 +660,19 @@ function Settings({ profile, setProfile, categories, setCategories, bills, setBi
           <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: 18 }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4, display: "flex", alignItems: "center", gap: 8 }}><AppIcon name="globe" size={16} /> Firebase Sync</div>
             <div style={{ fontSize: 12, color: C.muted, marginBottom: 12, lineHeight: 1.5 }}>
-              {IS_FIREBASE_ENABLED ? "Firebase aktif — data disimpan ke cloud." : "Firebase belum dikonfigurasi. Data disimpan secara tempatan (localStorage)."}
+              {IS_FIREBASE_ENABLED ? "Firebase aktif — data disimpan ke Firestore dan gambar bukti ke Storage." : "Firebase belum dikonfigurasi. Data disimpan secara tempatan (localStorage)."}
             </div>
             <div style={{ background: IS_FIREBASE_ENABLED ? C.green + "11" : C.yellow + "11", border: `1px solid ${IS_FIREBASE_ENABLED ? C.green : C.yellow}44`, borderRadius: 10, padding: 10 }}>
               <div style={{ fontSize: 12, color: IS_FIREBASE_ENABLED ? C.green : C.yellow }}>
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><AppIcon name={IS_FIREBASE_ENABLED ? "check" : "alert"} size={14} /> {IS_FIREBASE_ENABLED ? "Disambungkan ke Firebase" : "Mode Offline — buka fail wangku-app.jsx dan isi FIREBASE_CONFIG"}</span>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><AppIcon name={IS_FIREBASE_ENABLED ? "check" : "alert"} size={14} /> {IS_FIREBASE_ENABLED ? cloudStatus : "Mode Offline — isi .env Firebase dahulu"}</span>
               </div>
             </div>
+            {IS_FIREBASE_ENABLED && (
+              <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ fontSize: 11, color: C.muted }}>Mode semasa: {authChoice === "sync" ? "Sync Account" : "Personal Mode"}</div>
+                <Btn variant="secondary" onClick={onSwitchAccount}>Tukar Personal / Sync Account</Btn>
+              </div>
+            )}
           </div>
 
           <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: 18 }}>
@@ -1496,6 +1544,74 @@ const NAV = [
   { id: "reports", icon: "chart", labelKey: "reports" },
 ];
 
+function AuthGate({ onPersonal, onEmailAuth, cloudStatus }) {
+  const [mode, setMode] = useState("choice");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+
+  const submit = async (type) => {
+    setError("");
+    try {
+      await onEmailAuth(type, email.trim(), password);
+    } catch (err) {
+      setError(err.message || "Gagal masuk akaun");
+    }
+  };
+
+  return (
+    <div style={{ background: C.bg, minHeight: "100vh", fontFamily: "'DM Sans', system-ui, sans-serif", color: C.text, maxWidth: 480, margin: "0 auto", padding: 20, display: "flex", alignItems: "center" }}>
+      <style>{motionStyles("dark")}</style>
+      <div className="wk-page" style={{ width: "100%", display: "flex", flexDirection: "column", gap: 14 }}>
+        <div style={{ textAlign: "center", marginBottom: 10 }}>
+          <IconBubble name="wallet" color={C.accent} box={74} size={36} className="wk-float" style={{ margin: "0 auto 14px" }} />
+          <div style={{ fontSize: 30, fontWeight: 900 }}><span style={{ color: C.accent }}>Wang</span>Ku</div>
+          <div style={{ fontSize: 13, color: C.muted, marginTop: 6, lineHeight: 1.5 }}>Pilih cara simpan data anda.</div>
+        </div>
+
+        {mode === "choice" ? (
+          <>
+            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 18, padding: 18 }}>
+              <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 8 }}>
+                <IconBubble name="user" color={C.blue} box={44} size={22} />
+                <div>
+                  <div style={{ fontSize: 16, fontWeight: 900 }}>Personal Mode</div>
+                  <div style={{ fontSize: 12, color: C.muted }}>Data ikut device/browser ini sahaja.</div>
+                </div>
+              </div>
+              <Btn onClick={onPersonal}>Guna Personal Mode</Btn>
+            </div>
+
+            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 18, padding: 18 }}>
+              <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 8 }}>
+                <IconBubble name="globe" color={C.green} box={44} size={22} />
+                <div>
+                  <div style={{ fontSize: 16, fontWeight: 900 }}>Sync Account</div>
+                  <div style={{ fontSize: 12, color: C.muted }}>Login email supaya data boleh dibuka di device lain.</div>
+                </div>
+              </div>
+              <Btn onClick={() => setMode("login")} variant="secondary">Login / Create Account</Btn>
+            </div>
+          </>
+        ) : (
+          <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 18, padding: 18, display: "flex", flexDirection: "column", gap: 12 }}>
+            <Input label="Email" placeholder="nama@email.com" value={email} onChange={e => setEmail(e.target.value)} />
+            <Input label="Password" type="password" placeholder="Minimum 6 aksara" value={password} onChange={e => setPassword(e.target.value)} />
+            {error && <div style={{ color: C.red, fontSize: 12 }}>{error}</div>}
+            <div style={{ display: "flex", gap: 8 }}>
+              <Btn onClick={() => submit("login")} style={{ flex: 1 }}>Login</Btn>
+              <Btn onClick={() => submit("signup")} variant="secondary" style={{ flex: 1 }}>Create</Btn>
+            </div>
+            <Btn variant="ghost" onClick={() => setMode("choice")}>Balik</Btn>
+          </div>
+        )}
+
+        <div style={{ textAlign: "center", color: C.dim, fontSize: 11 }}>{cloudStatus}</div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [setup, setSetup] = useState(() => store.get("setup_done", false));
   const [profile, setProfile] = useState(() => store.get("profile", DEFAULT_PROFILE));
@@ -1507,8 +1623,78 @@ export default function App() {
   const [scannedReceipts, setScannedReceipts] = useState(() => store.get("scanned_receipts", []));
   const [page, setPage] = useState("dashboard");
   const [showNotif, setShowNotif] = useState(false);
+  const [authChoice, setAuthChoice] = useState(() => store.get("auth_choice", IS_FIREBASE_ENABLED ? "" : "local"));
+  const [cloudUser, setCloudUser] = useState(null);
+  const [cloudLoaded, setCloudLoaded] = useState(!IS_FIREBASE_ENABLED);
+  const [cloudStatus, setCloudStatus] = useState(IS_FIREBASE_ENABLED ? "Menyambung Firebase..." : "Mode Offline");
+  const imageUploadCache = useRef(new Map());
   C = PALETTES[prefs.theme] || PALETTES.dark;
   LANG = prefs.language || "ms";
+
+  useEffect(() => {
+    if (!IS_FIREBASE_ENABLED || !firebaseAuth) return;
+    const unsub = onAuthStateChanged(firebaseAuth, user => {
+      setCloudUser(user || null);
+    });
+    return unsub;
+  }, []);
+
+  const startPersonalMode = async () => {
+    store.set("auth_choice", "personal");
+    setAuthChoice("personal");
+    if (IS_FIREBASE_ENABLED && firebaseAuth) {
+      setCloudStatus("Menyambung Personal Mode...");
+      await signInAnonymously(firebaseAuth);
+    }
+  };
+
+  const handleEmailAuth = async (type, email, password) => {
+    if (!firebaseAuth) throw new Error("Firebase belum dikonfigurasi");
+    if (!email || password.length < 6) throw new Error("Masukkan email dan password minimum 6 aksara");
+    store.set("auth_choice", "sync");
+    setAuthChoice("sync");
+    setCloudStatus(type === "signup" ? "Membuat akaun..." : "Login...");
+    if (type === "signup") await createUserWithEmailAndPassword(firebaseAuth, email, password);
+    else await signInWithEmailAndPassword(firebaseAuth, email, password);
+  };
+
+  const handleSwitchAccount = async () => {
+    store.set("auth_choice", "");
+    setAuthChoice("");
+    setCloudUser(null);
+    setCloudLoaded(false);
+    if (firebaseAuth) await signOut(firebaseAuth);
+  };
+
+  useEffect(() => {
+    if (!IS_FIREBASE_ENABLED || !firebaseDb || !cloudUser) return;
+    let cancelled = false;
+    const loadCloudData = async () => {
+      try {
+        const refDoc = doc(firebaseDb, "users", cloudUser.uid, "wangku", "main");
+        const snap = await getDoc(refDoc);
+        if (cancelled) return;
+        if (snap.exists()) {
+          const data = snap.data();
+          setPrefs({ ...DEFAULT_PREFS, ...(data.prefs || {}) });
+          setProfile({ ...DEFAULT_PROFILE, ...(data.profile || {}) });
+          setCategories(data.categories?.length ? data.categories : DEFAULT_CATEGORIES);
+          setTransactions(data.transactions || []);
+          setGoals(data.goals || []);
+          setBills(data.bills || []);
+          setScannedReceipts(data.scannedReceipts || []);
+          if (data.setupDone !== undefined) setSetup(Boolean(data.setupDone));
+        }
+        setCloudLoaded(true);
+        setCloudStatus(snap.exists() ? "Firebase synced" : "Firebase ready");
+      } catch (err) {
+        setCloudLoaded(true);
+        setCloudStatus(`Firebase load gagal: ${err.message}`);
+      }
+    };
+    loadCloudData();
+    return () => { cancelled = true; };
+  }, [cloudUser]);
 
   // Auto-save everything to localStorage
   useEffect(() => { store.set("prefs", prefs); }, [prefs]);
@@ -1518,6 +1704,30 @@ export default function App() {
   useEffect(() => { store.set("goals", goals); }, [goals]);
   useEffect(() => { store.set("bills", bills); }, [bills]);
   useEffect(() => { store.set("scanned_receipts", scannedReceipts); }, [scannedReceipts]);
+
+  useEffect(() => {
+    if (!IS_FIREBASE_ENABLED || !firebaseDb || !cloudUser || !cloudLoaded) return;
+    const timer = setTimeout(async () => {
+      try {
+        setCloudStatus("Menyimpan ke Firebase...");
+        const data = await prepareCloudData(cloudUser.uid, {
+          setupDone: setup,
+          prefs,
+          profile,
+          categories,
+          transactions,
+          goals,
+          bills,
+          scannedReceipts,
+        }, imageUploadCache.current);
+        await setDoc(doc(firebaseDb, "users", cloudUser.uid, "wangku", "main"), data, { merge: true });
+        setCloudStatus("Firebase synced");
+      } catch (err) {
+        setCloudStatus(`Firebase save gagal: ${err.message}`);
+      }
+    }, 900);
+    return () => clearTimeout(timer);
+  }, [setup, prefs, profile, categories, transactions, goals, bills, scannedReceipts, cloudUser, cloudLoaded]);
 
   const handleSetupDone = (p, cats) => {
     setProfile(p); setCategories(cats);
@@ -1547,6 +1757,10 @@ export default function App() {
     ...goals.filter(g => pct(g.saved, g.target) >= 100).map(g => ({ id: "g" + g.id, msg: `Goal "${g.title}" telah tercapai!`, color: C.green, icon: "target" })),
   ];
 
+  if (IS_FIREBASE_ENABLED && !authChoice) {
+    return <AuthGate onPersonal={startPersonalMode} onEmailAuth={handleEmailAuth} cloudStatus={cloudStatus} />;
+  }
+
   if (!setup) return <Onboarding onDone={handleSetupDone} />;
 
   const pageTitles = { dashboard: tx("dashboardTitle"), transactions: tx("transactions"), budget: tx("budget"), goals: tx("goals"), scanner: tx("scannerTitle"), reports: tx("reports"), settings: tx("settingsTitle") };
@@ -1561,7 +1775,7 @@ export default function App() {
           <div style={{ fontSize: 20, fontWeight: 900 }}><span style={{ color: C.accent }}>Wang</span><span style={{ color: C.text }}>Ku</span></div>
           <div style={{ fontSize: 10, color: C.muted }}>
             {new Date().toLocaleDateString("ms-MY", { month: "long", year: "numeric" })}
-            {IS_FIREBASE_ENABLED && <span style={{ color: C.green }}> · Synced</span>}
+            {IS_FIREBASE_ENABLED && <span style={{ color: cloudStatus.includes("gagal") ? C.red : C.green }}> · {cloudStatus.includes("synced") ? "Synced" : "Cloud"}</span>}
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1600,7 +1814,7 @@ export default function App() {
         {page === "goals" && <Goals goals={goals} setGoals={setGoals} profile={profile} />}
         {page === "scanner" && <ReceiptScanner setTransactions={setTransactions} categories={categories} profile={profile} scannedReceipts={scannedReceipts} setScannedReceipts={setScannedReceipts} />}
         {page === "reports" && <Reports transactions={transactions} categories={categories} profile={profile} />}
-        {page === "settings" && <Settings profile={profile} setProfile={setProfile} categories={categories} setCategories={setCategories} bills={bills} setBills={setBills} prefs={prefs} setPrefs={setPrefs} scannedReceipts={scannedReceipts} onReset={handleReset} />}
+        {page === "settings" && <Settings profile={profile} setProfile={setProfile} categories={categories} setCategories={setCategories} bills={bills} setBills={setBills} prefs={prefs} setPrefs={setPrefs} scannedReceipts={scannedReceipts} authChoice={authChoice} cloudStatus={cloudStatus} onSwitchAccount={handleSwitchAccount} onReset={handleReset} />}
       </div>
 
       <div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 480, background: C.surface + "F8", backdropFilter: "blur(20px)", borderTop: `1px solid ${C.border}`, zIndex: 50 }}>
